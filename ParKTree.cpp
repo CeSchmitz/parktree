@@ -14,9 +14,13 @@
 
 using namespace std;
 
-static size_t signatureWidth; // Signature size (in bits)
-static size_t signatureSize;  // Signature size (in uint64_t)
-static size_t kmerLength;     // Kmer length
+/** Char to binary encoding */
+const vector<uint8_t> nucleotideIndex{ 0,0,0,0,0,0,0,0,0,0,0,0,0,0,0,0,0,0,0,0,0,0,0,0,0,0,0,0,0,0,0,0,0,0,0,0,0,0,0,0,0,0,0,0,0,0,0,0,0,0,0,0,0,0,0,0,0,0,0,0,0,0,0,0,0,0,0,1,0,0,0,2,0,0,0,0,0,0,0,0,0,0,0,0,3 };
+const vector<char> signatureIndex{ 'A', 'C', 'G', 'T' };
+
+// static size_t signatureWidth; // Signature size (in bits)
+// static size_t signatureSize;  // Signature size (in uint64_t)
+// static size_t kmerLength;     // Kmer length
 static float density;         // % of sequence set as bits
 static bool fastaOutput;      // Output fasta or csv
 
@@ -51,55 +55,70 @@ vector<pair<string, string>> loadFasta(const char *path)
   return sequences;
 }
 
+// void generateSignature(uint64_t *output, const pair<string, string> &fasta)
+// {
+//   // Generate a signature from the kmers contained within
+  
+//   string fastaSequence = fasta.second;
+//   // If the sequence is shorter than the kmer length, pad it with Xs
+//   while (fastaSequence.size() < kmerLength) {
+//     fastaSequence.push_back('X');
+//   }
+  
+//   ranlux24_base rng;
+//   uniform_int_distribution<int> dist(-64 * signatureSize, signatureSize * 64 - 1);
+//   vector<int> unflattenedSignature(signatureSize * 64);
+//   int setBits = density * signatureSize * 64;
+//   //fprintf(stderr, "%s\n", fastaSequence.c_str());
+  
+//   for (size_t i = 0; i < fastaSequence.size() - kmerLength + 1; i++) {
+//     seed_seq rngSeed(begin(fastaSequence) + i, begin(fastaSequence) + i + kmerLength);
+//     rng.seed(rngSeed);
+//     string kmer(begin(fastaSequence) + i, begin(fastaSequence) + i + kmerLength);
+//     //fprintf(stderr, "- %s\n", kmer.c_str());
+    
+//     for (int j = 0; j < setBits; j++) {
+//       int bitPos = dist(rng);
+//       if (bitPos >= 0) {
+//         unflattenedSignature[bitPos] += 1;
+//       } else {
+//         unflattenedSignature[bitPos + 64 * signatureSize] -= 1;
+//       }
+//     }
+//   }
+//   fill(output, output + signatureSize, 0);
+//   for (size_t i = 0; i < signatureSize * 64; i++) {
+//     if (unflattenedSignature[i] > 0) {
+//       output[i / 64] |= (uint64_t)1 << (i % 64);
+//     }
+//   }
+// }
+
+// NEW METHOD
+// Change to use binary encoding version
 void generateSignature(uint64_t *output, const pair<string, string> &fasta)
 {
-  // Generate a signature from the kmers contained within
-  
+  // Binary encode genetic string
   string fastaSequence = fasta.second;
-  // If the sequence is shorter than the kmer length, pad it with Xs
-  while (fastaSequence.size() < kmerLength) {
-    fastaSequence.push_back('X');
+  uint64_t sig = 0;
+  for (size_t j = 0; j < fastaSequence.length(); j++) {
+    char c = fastaSequence[j];
+    sig |= (uint64_t)(nucleotideIndex[c]) << (j * 2);
   }
-  
-  ranlux24_base rng;
-  uniform_int_distribution<int> dist(-64 * signatureSize, signatureSize * 64 - 1);
-  vector<int> unflattenedSignature(signatureSize * 64);
-  int setBits = density * signatureSize * 64;
-  //fprintf(stderr, "%s\n", fastaSequence.c_str());
-  
-  for (size_t i = 0; i < fastaSequence.size() - kmerLength + 1; i++) {
-    seed_seq rngSeed(begin(fastaSequence) + i, begin(fastaSequence) + i + kmerLength);
-    rng.seed(rngSeed);
-    string kmer(begin(fastaSequence) + i, begin(fastaSequence) + i + kmerLength);
-    //fprintf(stderr, "- %s\n", kmer.c_str());
-    
-    for (int j = 0; j < setBits; j++) {
-      int bitPos = dist(rng);
-      if (bitPos >= 0) {
-        unflattenedSignature[bitPos] += 1;
-      } else {
-        unflattenedSignature[bitPos + 64 * signatureSize] -= 1;
-      }
-    }
-  }
-  fill(output, output + signatureSize, 0);
-  for (size_t i = 0; i < signatureSize * 64; i++) {
-    if (unflattenedSignature[i] > 0) {
-      output[i / 64] |= (uint64_t)1 << (i % 64);
-    }
-  }
+  *output = sig;
 }
 
 vector<uint64_t> convertFastaToSignatures(const vector<pair<string, string>> &fasta)
 {
   vector<uint64_t> output;
   // Allocate space for the strings
-  
-  output.resize(fasta.size() * signatureSize);
+  output.resize(fasta.size());
+  // output.resize(fasta.size() * signatureSize);
   
   #pragma omp parallel for schedule(dynamic)
   for (size_t i = 0; i < fasta.size(); i++) {
-    generateSignature(&output[signatureSize * i], fasta[i]);
+    generateSignature(&output[i], fasta[i]);
+    // generateSignature(&output[signatureSize * i], fasta[i]);
   }
   
   return output;
@@ -142,23 +161,38 @@ vector<size_t> clusterSignatures(const vector<uint64_t> &sigs)
 size_t ktree_order = 10;
 size_t ktree_capacity = 1000000;
 
+// void dbgPrintSignature(const uint64_t *sig)
+// {
+//   fprintf(stderr, "%p: ", sig);
+//   for (size_t i = 0; i < 64; i++) {
+//   // for (size_t i = 0; i < signatureSize * 64; i++) {
+//     if (sig[i / 64] & (1ull << (i % 64))) {
+//       fprintf(stderr, "1");
+//     } else {
+//       fprintf(stderr, "0");
+//     }
+//   }
+//   fprintf(stderr, "\n");
+// }
+
+// Convert binary signature back to genetic string
 void dbgPrintSignature(const uint64_t *sig)
 {
   fprintf(stderr, "%p: ", sig);
-  for (size_t i = 0; i < signatureSize * 64; i++) {
-    if (sig[i / 64] & (1ull << (i % 64))) {
-      fprintf(stderr, "1");
-    } else {
-      fprintf(stderr, "0");
-    }
+  uint64_t signature  = *sig;
+  string sequence = string(20, ' ');
+  for (size_t j = 0; j < 20; j++) {
+    sequence[j] = signatureIndex[(signature >> (j * 2)) & 0x3];
   }
+  fprintf(stderr, "%s", sequence.c_str());
   fprintf(stderr, "\n");
 }
 
 void dbgPrintMatrix(const uint64_t *matrix)
 {
   size_t ktree_csig_height = (ktree_order + 63) / 64;
-  for (size_t i = 0; i < signatureSize * 64; i++) {
+  for (size_t i = 0; i < 64; i++) {
+  // for (size_t i = 0; i < signatureSize * 64; i++) {
     fprintf(stderr, "%03zu:", i);
     for (size_t j = 0; j < ktree_csig_height * 64; j++) {
       auto val = matrix[i * ktree_csig_height + (j / 64)];
@@ -180,16 +214,21 @@ template<class RNG>
 vector<uint64_t> createRandomSigs(RNG &&rng, const vector<uint64_t> &sigs)
 {
   constexpr size_t clusterCount = 2;
-  vector<uint64_t> clusterSigs(signatureSize * clusterCount);
-  size_t signatureCount = sigs.size() / signatureSize;
+  vector<uint64_t> clusterSigs(clusterCount);
+  size_t signatureCount = sigs.size();
   uniform_int_distribution<size_t> dist(0, signatureCount - 1);
+  // vector<uint64_t> clusterSigs(signatureSize * clusterCount);
+  // size_t signatureCount = sigs.size() / signatureSize;
+  // uniform_int_distribution<size_t> dist(0, signatureCount - 1);
   bool finished = false;
   
   unordered_set<string> uniqueSigs;
   for (size_t i = 0; i < signatureCount; i++) {
     size_t sig = dist(rng);
-    string sigData(signatureSize * sizeof(uint64_t), ' ');
-    memcpy(&sigData[0], &sigs[sig * signatureSize], signatureSize * sizeof(uint64_t));
+    string sigData(sizeof(uint64_t), ' ');
+    memcpy(&sigData[0], &sigs[sig], sizeof(uint64_t));
+    // string sigData(signatureSize * sizeof(uint64_t), ' ');
+    // memcpy(&sigData[0], &sigs[sig * signatureSize], signatureSize * sizeof(uint64_t));
     uniqueSigs.insert(sigData);
     if (uniqueSigs.size() >= clusterCount) {
       finished = true;
@@ -199,7 +238,8 @@ vector<uint64_t> createRandomSigs(RNG &&rng, const vector<uint64_t> &sigs)
   
   size_t i = 0;
   for (const auto &sig : uniqueSigs) {
-    memcpy(&clusterSigs[i * signatureSize], sig.data(), signatureSize * sizeof(uint64_t));
+    memcpy(&clusterSigs[i], sig.data(), sizeof(uint64_t));
+    //memcpy(&clusterSigs[i * signatureSize], sig.data(), signatureSize * sizeof(uint64_t));
     i++;
   }
   
@@ -208,9 +248,10 @@ vector<uint64_t> createRandomSigs(RNG &&rng, const vector<uint64_t> &sigs)
       fprintf(stderr, "This should not happen\n");
       exit(1);
     }
-    for (size_t i = 0; i < signatureSize; i++) {
-      clusterSigs.push_back(clusterSigs[i]);
-    }
+    clusterSigs.push_back(clusterSigs[0]);
+    // for (size_t i = 0; i < signatureSize; i++) {
+    //   clusterSigs.push_back(clusterSigs[i]);
+    // }
   }
   
   return clusterSigs;
@@ -229,51 +270,91 @@ vector<vector<size_t>> createClusterLists(const vector<size_t> &clusters)
 vector<uint64_t> createClusterSigs(const vector<vector<size_t>> &clusterLists, const vector<uint64_t> &sigs)
 {
   constexpr size_t clusterCount = 2;
-  vector<uint64_t> clusterSigs(signatureSize * clusterCount);
-  //#pragma omp parallel
-  {
-    vector<int> unflattenedSignature(signatureWidth);
-    //#pragma omp for
-    for (size_t cluster = 0; cluster < clusterLists.size(); cluster++) {
-      fill(begin(unflattenedSignature), end(unflattenedSignature), 0);
-      
-      for (size_t signature : clusterLists[cluster]) {
-        const uint64_t *signatureData = &sigs[signatureSize * signature];
-        for (size_t i = 0; i < signatureWidth; i++) {
-          uint64_t signatureMask = (uint64_t)1 << (i % 64);
-          if (signatureMask & signatureData[i / 64]) {
-            unflattenedSignature[i] += 1;
-          } else {
-            unflattenedSignature[i] -= 1;
-          }
+  vector<uint64_t> clusterSigs(clusterCount);
+
+  for (size_t cluster = 0; cluster < clusterLists.size(); cluster++) {
+    size_t minAvgDist = numeric_limits<size_t>::max();
+    // Compare all of the sigs in the cluster against each other and find sig with lowest avg dist
+    for (size_t outterCount : clusterLists[cluster]) {
+      const uint64_t *sigToCalc = &sigs[outterCount];
+      double averageDist = 0;
+      for (size_t inneCount : clusterLists[cluster]) {
+        const uint64_t *sigInCluster = &sigs[outterCount];
+        // Don't include self
+        if (sigToCalc == sigInCluster) {
+          continue;
         }
+        uint64_t xoredSignatures = *sigToCalc ^ *sigInCluster;
+        uint64_t evenBits = xoredSignatures & 0xAAAAAAAAAAAAAAAAULL;
+        uint64_t oddBits = xoredSignatures & 0x5555555555555555ULL;
+        uint64_t mismatches = (evenBits >> 1) | oddBits;
+        averageDist += __builtin_popcountll(mismatches);
       }
-      
-      uint64_t *flattenedSignature = &clusterSigs[cluster * signatureSize];
-      for (size_t i = 0; i < signatureWidth; i++) {
-        if (unflattenedSignature[i] > 0) {
-          flattenedSignature[i / 64] |= (uint64_t)1 << (i % 64);
-        }
+      averageDist /= clusterLists[cluster].size() - 1;
+      if (averageDist < minAvgDist) {
+        minAvgDist = averageDist;
+        clusterSigs[cluster] = *sigToCalc;
       }
-    }
+    }  
   }
   return clusterSigs;
 }
+
+// vector<uint64_t> createClusterSigs(const vector<vector<size_t>> &clusterLists, const vector<uint64_t> &sigs)
+// {
+//   constexpr size_t clusterCount = 2;
+//   vector<uint64_t> clusterSigs(signatureSize * clusterCount);
+//   //#pragma omp parallel
+//   {
+//     vector<int> unflattenedSignature(signatureWidth);
+//     //#pragma omp for
+//     for (size_t cluster = 0; cluster < clusterLists.size(); cluster++) {
+//       fill(begin(unflattenedSignature), end(unflattenedSignature), 0);
+      
+//       for (size_t signature : clusterLists[cluster]) {
+//         const uint64_t *signatureData = &sigs[signatureSize * signature];
+//         for (size_t i = 0; i < signatureWidth; i++) {
+//           uint64_t signatureMask = (uint64_t)1 << (i % 64);
+//           if (signatureMask & signatureData[i / 64]) {
+//             unflattenedSignature[i] += 1;
+//           } else {
+//             unflattenedSignature[i] -= 1;
+//           }
+//         }
+//       }
+      
+//       uint64_t *flattenedSignature = &clusterSigs[cluster * signatureSize];
+//       for (size_t i = 0; i < signatureWidth; i++) {
+//         if (unflattenedSignature[i] > 0) {
+//           flattenedSignature[i / 64] |= (uint64_t)1 << (i % 64);
+//         }
+//       }
+//     }
+//   }
+//   return clusterSigs;
+// }
 
 void reclusterSignatures(vector<size_t> &clusters, const vector<uint64_t> &meanSigs, const vector<uint64_t> &sigs)
 {
   set<size_t> allClusters;
   for (size_t sig = 0; sig < clusters.size(); sig++) {
-    const uint64_t *sourceSignature = &sigs[sig * signatureSize];
+    const uint64_t *sourceSignature = &sigs[sig];
+    // const uint64_t *sourceSignature = &sigs[sig * signatureSize];
     size_t minHdCluster = 0;
     size_t minHd = numeric_limits<size_t>::max();
 
     for (size_t cluster = 0; cluster < 2; cluster++) {
-      const uint64_t *clusterSignature = &meanSigs[cluster * signatureSize];
-      size_t hd = 0;
-      for (size_t i = 0; i < signatureSize; i++) {
-        hd += __builtin_popcountll(sourceSignature[i] ^ clusterSignature[i]);
-      }
+      const uint64_t *clusterSignature = &meanSigs[cluster];
+      uint64_t xoredSignatures = *sourceSignature ^ *clusterSignature;
+      uint64_t evenBits = xoredSignatures & 0xAAAAAAAAAAAAAAAAULL;
+      uint64_t oddBits = xoredSignatures & 0x5555555555555555ULL;
+      uint64_t mismatches = (evenBits >> 1) | oddBits;
+      size_t hd = __builtin_popcountll(mismatches);
+      // const uint64_t *clusterSignature = &meanSigs[cluster * signatureSize];
+      // size_t hd = 0;
+      // for (size_t i = 0; i < signatureSize; i++) {
+      //   hd += __builtin_popcountll(sourceSignature[i] ^ clusterSignature[i]);
+      // }
       if (hd < minHd) {
         minHd = hd;
         minHdCluster = cluster;
@@ -324,7 +405,9 @@ struct KTree {
     }
     this->capacity = capacity;
     matrixHeight = (order + 63) / 64;
-    matrixSize = matrixHeight * signatureSize * 64;
+    matrixSize = matrixHeight * 64;
+    // matrixHeight = (order + 63) / 64;
+    // matrixSize = matrixHeight * signatureSize * 64;
     
     #pragma omp parallel
     {
@@ -354,7 +437,8 @@ struct KTree {
       }
       #pragma omp single
       {
-        means.resize(capacity * signatureSize);
+        means.resize(capacity);
+        // means.resize(capacity * signatureSize);
       }
     }
   }
@@ -363,35 +447,52 @@ struct KTree {
     reserve(capacity);
   }
   
-  size_t calcHD(const uint64_t *a, const uint64_t *b) const
+  size_t calcDist(const uint64_t *a, const uint64_t *b) const
   {
-    size_t c = 0;
-    for (size_t i = 0; i < signatureSize; i++) {
-    c += __builtin_popcountll(a[i] ^ b[i]);
-    }
-    return c;
+  // size_t calcHD(const uint64_t *a, const uint64_t *b) const
+  // {
+    uint64_t xoredSignatures = *a ^ *b;
+    uint64_t evenBits = xoredSignatures & 0xAAAAAAAAAAAAAAAAULL;
+    uint64_t oddBits = xoredSignatures & 0x5555555555555555ULL;
+    uint64_t mismatches = (evenBits >> 1) | oddBits;
+    return __builtin_popcountll(mismatches);
+    // size_t c = 0;
+    // for (size_t i = 0; i < signatureSize; i++) {
+    // c += __builtin_popcountll(a[i] ^ b[i]);
+    // }
+    // return c;
   }
   
+  // Find where in the tree to insert the PARAM signature by traversing the tree.
   size_t traverse(const uint64_t *signature) const
   {
     size_t node = root;
     while (isBranchNode[node]) {
-      size_t lowestHD = numeric_limits<size_t>::max();
-      size_t lowestHDchild = 0;
+      size_t lowestDist = numeric_limits<size_t>::max();
+      size_t lowestDistChild = 0;
+      // size_t lowestHD = numeric_limits<size_t>::max();
+      // size_t lowestHDchild = 0;
       
       for (size_t i = 0; i < childCounts[node]; i++) {
         size_t child = childLinks[node * order + i];
-        size_t hd = calcHD(&means[child * signatureSize], signature);
-        if (hd < lowestHD) {
-          lowestHD = hd;
-          lowestHDchild = child;
+        size_t dist = calcDist(&means[child], signature);
+        if (dist < lowestDist) {
+          lowestDist = dist;
+          lowestDistChild = child;
         }
+        //size_t hd = calcHD(&means[child * signatureSize], signature);
+        // if (hd < lowestHD) {
+        //   lowestHD = hd;
+        //   lowestHDchild = child;
+        // }
       }
-      node = lowestHDchild;
+      node = lowestDistChild;
+      // node = lowestHDchild;
     }
     return node;
   }
   
+  // A method of store all signatures in a matrix. Can be used to extact all signautes in this node
   void addSigToMatrix(uint64_t *matrix, size_t child, const uint64_t *sig) const
   {
     size_t childPos = child / 64;
@@ -402,7 +503,8 @@ struct KTree {
     //fprintf(stderr, "To this matrix:\n");
     //dbgPrintMatrix(matrix);
     
-    for (size_t i = 0; i < signatureSize * 64; i++) {
+    for (size_t i = 0; i < 64; i++) {
+    //for (size_t i = 0; i < signatureSize * 64; i++) {
       matrix[i * matrixHeight + childPos] |= ((sig[i / 64] >> (i % 64)) & 0x01) << childOff;
     }
     //fprintf(stderr, "Resulting in:\n");
@@ -416,7 +518,8 @@ struct KTree {
     uint64_t mask = ~(1ull << childOff);
     
     //fprintf(stderr, "Removing the %zuth child from matrix\n", child);    
-    for (size_t i = 0; i < signatureSize * 64; i++) {
+    for (size_t i = 0; i < 64; i++) {
+    //for (size_t i = 0; i < signatureSize * 64; i++) {
       matrix[i * matrixHeight + childPos] &= mask;
     }
     //fprintf(stderr, "Resulting in:\n");
@@ -425,27 +528,64 @@ struct KTree {
   
   void recalculateSig(size_t node)
   {
-    size_t children = childCounts[node];
-    uint64_t *matrix = &matrices[node * matrixSize];
-    uint64_t *sig = &means[node * signatureSize];
-    fill(sig, sig + signatureSize, 0ull);
-    
-    auto threshold = (children / 2) + 1;
-    
-    for (size_t i = 0; i < signatureSize * 64; i++) {
-      size_t c = 0;
-      for (size_t j = 0; j < matrixHeight; j++) {
-        auto val = matrix[i * matrixHeight + j];
-        c += __builtin_popcountll(val);
-      }
-      if (c >= threshold) {
-        sig[i / 64] |= 1ull << (i % 64);
+    size_t nodeSigCount = childCounts[node];
+    vector<uint64_t> sigs(nodeSigCount);
+    for (int i = 0; i < childCounts[node]; i++) {
+      uint64_t *currentSig = &sigs[i];
+      uint64_t *matrix = &matrices[node * matrixSize];
+      for (size_t j = 0; j < 64; j++) {
+        currentSig[j / 64] |= ((matrix[j * matrixHeight + i / 64] >> (i % 64)) & 1) << (j % 64);
       }
     }
-    //fprintf(stderr, "Mean sig:\n");
-    //dbgPrintSignature(sig);
+
+    size_t minAvgDist = numeric_limits<size_t>::max();
+    //uint64_t *meanSig = &means[node];
+    // Compare all of the sigs in the cluster against each other and find sig with lowest avg dist
+    for (const uint64_t& sigToCalc : sigs) {
+      double averageDist = 0;
+      for (const uint64_t& sigInCluster : sigs) {
+        // Don't include self
+        if (sigToCalc == sigInCluster) {
+          continue;
+        }
+        uint64_t xoredSignatures = sigToCalc ^ sigInCluster;
+        uint64_t evenBits = xoredSignatures & 0xAAAAAAAAAAAAAAAAULL;
+        uint64_t oddBits = xoredSignatures & 0x5555555555555555ULL;
+        uint64_t mismatches = (evenBits >> 1) | oddBits;
+        averageDist += __builtin_popcountll(mismatches);
+      }
+      averageDist /= nodeSigCount - 1;
+      if (averageDist < minAvgDist) {
+        minAvgDist = averageDist;
+        memcpy(&means[node], &sigToCalc, sizeof(uint64_t));
+      }
+    }
   }
+
+  // void recalculateSig(size_t node)
+  // {
+  //   size_t children = childCounts[node];
+  //   uint64_t *matrix = &matrices[node * matrixSize];
+  //   uint64_t *sig = &means[node * signatureSize];
+  //   fill(sig, sig + signatureSize, 0ull);
+    
+  //   auto threshold = (children / 2) + 1;
+    
+  //   for (size_t i = 0; i < signatureSize * 64; i++) {
+  //     size_t c = 0;
+  //     for (size_t j = 0; j < matrixHeight; j++) {
+  //       auto val = matrix[i * matrixHeight + j];
+  //       c += __builtin_popcountll(val);
+  //     }
+  //     if (c >= threshold) {
+  //       sig[i / 64] |= 1ull << (i % 64);
+  //     }
+  //   }
+  //   //fprintf(stderr, "Mean sig:\n");
+  //   //dbgPrintSignature(sig);
+  // }
   
+  // From PARAM node, recalculate node middle points
   void recalculateUp(size_t node)
   {
     size_t limit = 10;
@@ -489,14 +629,18 @@ struct KTree {
     // Add 'sig' to the current node, splitting it in the process
     //fprintf(stderr, "Adding signature:\n");
     //dbgPrintSignature(sig);
-    size_t nodeSigs = childCounts[node] + 1;
-    vector<uint64_t> sigs(nodeSigs * signatureSize);
-    memcpy(&sigs[ childCounts[node] * signatureSize], sig, signatureSize * sizeof(uint64_t));
+    size_t nodeSigs = childCounts[node] + 1; // Plus 1 to include new param *sig
+    vector<uint64_t> sigs(nodeSigs);
+    memcpy(&sigs[childCounts[node]], sig, sizeof(uint64_t)); // Add to end using memcpy
+    //vector<uint64_t> sigs(nodeSigs * signatureSize);
+    //memcpy(&sigs[ childCounts[node] * signatureSize], sig, signatureSize * sizeof(uint64_t));
     
     for (int i = 0; i < childCounts[node]; i++) {
-      uint64_t *currentSig = &sigs[i * signatureSize];
+      uint64_t *currentSig = &sigs[i];
+      // uint64_t *currentSig = &sigs[i * signatureSize];
       uint64_t *matrix = &matrices[node * matrixSize];
-      for (size_t j = 0; j < signatureSize * 64; j++) {
+      for (size_t j = 0; j < 64; j++) {
+      // for (size_t j = 0; j < signatureSize * 64; j++) {
         currentSig[j / 64] |= ((matrix[j * matrixHeight + i / 64] >> (i % 64)) & 1) << (j % 64);
       }
     }
@@ -504,7 +648,8 @@ struct KTree {
     /*
     fprintf(stderr, "Signatures converted for clustering:\n");
     for (size_t i = 0; i < nodeSigs; i++) {
-      uint64_t *currentSig = &sigs[i * signatureSize];
+      uint64_t *currentSig = &sigs[i];
+      //uint64_t *currentSig = &sigs[i * signatureSize];
       dbgPrintSignature(currentSig);
     }
     */
@@ -549,11 +694,13 @@ struct KTree {
         if (isBranchNode[sibling]) {
           parentLinks[childLinks[sibling * order + siblingIdx]] = sibling;
         }
-        addSigToMatrix(&matrices[sibling * matrixSize], siblingIdx, &sigs[seqIdx * signatureSize]);
+        addSigToMatrix(&matrices[sibling * matrixSize], siblingIdx, &sigs[seqIdx]);
+        // addSigToMatrix(&matrices[sibling * matrixSize], siblingIdx, &sigs[seqIdx * signatureSize]);
         siblingIdx++;
       }
     }
-    memcpy(&means[sibling * signatureSize], &meanSigs[1 * signatureSize], signatureSize * sizeof(uint64_t));
+    memcpy(&means[sibling], &meanSigs[1], sizeof(uint64_t));
+    // memcpy(&means[sibling * signatureSize], &meanSigs[1 * signatureSize], signatureSize * sizeof(uint64_t));
     
     // Fill the current node with the other cluster of signatures
     {
@@ -569,7 +716,8 @@ struct KTree {
         if (isBranchNode[node]) {
           parentLinks[childLinks[node * order + nodeIdx]] = node;
         }
-        addSigToMatrix(&matrices[node * matrixSize], nodeIdx, &sigs[seqIdx * signatureSize]);
+        addSigToMatrix(&matrices[node * matrixSize], nodeIdx, &sigs[seqIdx]);
+        // addSigToMatrix(&matrices[node * matrixSize], nodeIdx, &sigs[seqIdx * signatureSize]);
         nodeIdx++;
       }
     }
@@ -591,8 +739,10 @@ struct KTree {
       isBranchNode[newRoot] = 1;
       childLinks[newRoot * order + 0] = node;
       childLinks[newRoot * order + 1] = node;
-      addSigToMatrix(&matrices[newRoot * matrixSize], 0, &meanSigs[0 * signatureSize]);
-      addSigToMatrix(&matrices[newRoot * matrixSize], 1, &meanSigs[1 * signatureSize]);
+      addSigToMatrix(&matrices[newRoot * matrixSize], 0, &meanSigs[0]);
+      addSigToMatrix(&matrices[newRoot * matrixSize], 1, &meanSigs[1]);
+      // addSigToMatrix(&matrices[newRoot * matrixSize], 0, &meanSigs[0 * signatureSize]);
+      // addSigToMatrix(&matrices[newRoot * matrixSize], 1, &meanSigs[1 * signatureSize]);
       
       root = newRoot;
     } else {
@@ -621,21 +771,24 @@ struct KTree {
       }
       
       removeSigFromMatrix(&matrices[parent * matrixSize], idx);
-      addSigToMatrix(&matrices[parent * matrixSize], idx, &meanSigs[0 * signatureSize]);
+      addSigToMatrix(&matrices[parent * matrixSize], idx, &meanSigs[0]);
+      // addSigToMatrix(&matrices[parent * matrixSize], idx, &meanSigs[0 * signatureSize]);
       
       // Connect sibling node to parent
       parentLinks[sibling] = parent;
       
       // Now add a link in the parent node to the sibling node
       if (childCounts[parent] + 1 < order) {
-        addSigToMatrix(&matrices[parent * matrixSize], childCounts[parent], &meanSigs[1 * signatureSize]);
+        addSigToMatrix(&matrices[parent * matrixSize], childCounts[parent], &meanSigs[1]);
+        //addSigToMatrix(&matrices[parent * matrixSize], childCounts[parent], &meanSigs[1 * signatureSize]);
         childLinks[parent * order + childCounts[parent]] = sibling;
         childCounts[parent]++;
         
         // Update signatures (may change?)
         recalculateUp(parent);
       } else {
-        splitNode(rng, parent, &meanSigs[1 * signatureSize], insertionList, sibling);
+        splitNode(rng, parent, &meanSigs[1], insertionList, sibling);
+        //splitNode(rng, parent, &meanSigs[1 * signatureSize], insertionList, sibling);
       }
       // Unlock the parent
       omp_unset_lock(&locks[parent]);
@@ -702,13 +855,14 @@ void compressClusterList(vector<size_t> &clusters)
 
 vector<size_t> clusterSignatures(const vector<uint64_t> &sigs)
 {
-  size_t sigCount = sigs.size() / signatureSize;
+  size_t sigCount = sigs.size();
+  //size_t sigCount = sigs.size() / signatureSize;
   vector<size_t> clusters(sigCount);
   KTree tree(ktree_order, ktree_capacity);
   
   size_t firstNodes = 1;
   if (firstNodes > sigCount) firstNodes = sigCount;
-  
+  // Should we just push 0?
   vector<size_t> insertionList;
   for (size_t i = 0; i < firstNodes; i++) {
     insertionList.push_back(firstNodes - i - 1);
@@ -717,32 +871,36 @@ vector<size_t> clusterSignatures(const vector<uint64_t> &sigs)
   default_random_engine rng;
   // Insert first 1 nodes single-threaded
   for (size_t i = 0; i < firstNodes; i++) {
-    tree.insert(rng, &sigs[i * signatureSize], insertionList);
+    tree.insert(rng, &sigs[i], insertionList);
+    // tree.insert(rng, &sigs[i * signatureSize], insertionList);
   }
   
   // What's the next free insertion point?
+  // Is this undefine behaviour because vector is empty. Can't we just assume 1 is next free given above 
   size_t nextFree = insertionList.back();
   
-  #pragma omp parallel
+  //#pragma omp parallel
   {
     default_random_engine rng;
     vector<size_t> insertionList;
     
-    #pragma omp for
+    //#pragma omp for
     for (size_t i = nextFree; i < ktree_capacity; i++) {
       insertionList.push_back(ktree_capacity - i - 1);
     }
     
-    #pragma omp for
+    //#pragma omp for
     for (size_t i = firstNodes; i < sigCount; i++) {
-      tree.insert(rng, &sigs[i * signatureSize], insertionList);
+      tree.insert(rng, &sigs[i], insertionList);
+      // tree.insert(rng, &sigs[i * signatureSize], insertionList);
     }
   }
   
   // We've created the tree. Now reinsert everything
   #pragma omp parallel for
   for (size_t i = 0; i < sigCount; i++) {
-    size_t clus = tree.traverse(&sigs[i * signatureSize]);
+    size_t clus = tree.traverse(&sigs[i]);
+    //size_t clus = tree.traverse(&sigs[i * signatureSize]);
     clusters[i] = clus;
   }
   
@@ -768,8 +926,8 @@ int main(int argc, char **argv)
     fprintf(stderr, "  --fasta-output\n");
     return 1;
   }
-  signatureWidth = 256;
-  kmerLength = 5;
+  // signatureWidth = 256;
+  // kmerLength = 5;
   density = 1.0f / 21.0f;
   fastaOutput = false;
   
@@ -777,9 +935,10 @@ int main(int argc, char **argv)
   
   for (int a = 1; a < argc; a++) {
     string arg(argv[a]);
-    if (arg == "-sw") signatureWidth = atoi(argv[++a]);
-    else if (arg == "-k") kmerLength = atoi(argv[++a]);
-    else if (arg == "-d") density = atof(argv[++a]);
+    // if (arg == "-sw") signatureWidth = atoi(argv[++a]);
+    // else if (arg == "-k") kmerLength = atoi(argv[++a]);
+    // else if (arg == "-d") density = atof(argv[++a]);
+    if (arg == "-d") density = atof(argv[++a]);
     else if (arg == "-o") ktree_order = atoi(argv[++a]);
     else if (arg == "-c") ktree_capacity = atoi(argv[++a]);
     else if (arg == "--fasta-output") fastaOutput = true;
@@ -790,20 +949,16 @@ int main(int argc, char **argv)
     }
   }
     
-  if (signatureWidth <= 0 || signatureWidth % 64 != 0) {
-    fprintf(stderr, "Error: signature width is not a multiple of 64\n");
-    return 1;
-  }
-  if (kmerLength <= 0) {
-    fprintf(stderr, "Error: kmer length must be a positive nonzero integer\n");
-    return 1;
-  }
+  // if (kmerLength <= 0) {
+  //   fprintf(stderr, "Error: kmer length must be a positive nonzero integer\n");
+  //   return 1;
+  // }
   if (density < 0.0f || density > 1.0f) {
     fprintf(stderr, "Error: density must be a positive value between 0 and 1\n");
     return 1;
   }
 
-  signatureSize = signatureWidth / 64;
+  // signatureSize = signatureWidth / 64;
   
   fprintf(stderr, "Loading fasta...");
   auto fasta = loadFasta(fastaFile.c_str());
